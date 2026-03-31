@@ -1,0 +1,193 @@
+# Impact Analysis (iA) Tools for IBM i
+# Source: programmers.io ia-mcp-server — tools for code impact analysis
+# These tools query the iA repository tables (pre-parsed IBM i source metadata).
+#
+# IMPORTANT: The library is configured via the IA_LIBRARY environment variable.
+# Default iA library: SDK01 (set IA_LIBRARY in .env to override).
+#
+# Tables queried: IAALLREFPF, IAPGMCALLS, IAFIDTL, IAPGMVARS
+
+sources:
+  ibmi:
+    host: ${DB2i_HOST}
+    user: ${DB2i_USER}
+    password: "${DB2i_PASS}"
+    port: ${DB2i_PORT}
+    ignore-unauthorized: true
+
+tools:
+
+  # ── 1. Where Used — find all objects referencing a given object ──────────
+  ia_where_used:
+    name: ia-where-used
+    source: ibmi
+    description: >
+      Find every program, service program, command, display file, and logical file
+      that references a specific object. Most common impact analysis query.
+      Use before modifying or deleting any object to understand the blast radius.
+      Queries the iA IAALLREFPF cross-reference table (richer than DSPPGMREF).
+    parameters:
+      - name: object_name
+        type: string
+        description: "IBM i object name to search for (e.g., ORDERFILE, CUSTPGM)"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: object_type
+        type: string
+        description: "Filter by type: *ALL, *PGM, *SRVPGM, *FILE, *DSPF, *CMD (default: *ALL)"
+        required: false
+        default: "*ALL"
+      - name: limit
+        type: integer
+        description: "Max results (default: 200)"
+        required: false
+        default: 200
+        min: 1
+        max: 5000
+    statement: |
+      SELECT DISTINCT
+        OBJECT_NAME AS using_object,
+        OBJECT_TYPE AS using_type,
+        OBJECT_ATTR AS using_attr,
+        REFERENCED_OBJ AS referenced_object,
+        REFERENCED_OBJTYP AS referenced_type,
+        MAPED_FROM AS reference_source
+      FROM ${IA_LIBRARY}.IAALLREFPF
+      WHERE REFERENCED_OBJ = :object_name
+        AND (:object_type = '*ALL' OR REFERENCED_OBJTYP = :object_type)
+      ORDER BY OBJECT_TYPE, OBJECT_NAME
+      FETCH FIRST :limit ROWS ONLY
+
+  # ── 2. Call Hierarchy — program call tree (callers/callees/both) ────────
+  ia_call_hierarchy:
+    name: ia-call-hierarchy
+    source: ibmi
+    description: >
+      Generate the call tree for a program — who calls it (CALLERS), what it calls
+      (CALLEES), or both. Includes procedure-level detail and call sequence numbers.
+      Queries IAPGMCALLS — captures CALL, CALLP, and bound module references.
+    parameters:
+      - name: program_name
+        type: string
+        description: "Program or module name"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: direction
+        type: string
+        description: "CALLERS, CALLEES, or BOTH (default: BOTH)"
+        required: false
+        default: "BOTH"
+      - name: limit
+        type: integer
+        description: "Max results (default: 200)"
+        required: false
+        default: 200
+        min: 1
+        max: 5000
+    statement: |
+      SELECT
+        'CALLEES' AS direction,
+        MBR_NAME AS source_program,
+        CALLED_OBJCT AS target_program,
+        FROM_PROC AS calling_procedure,
+        CALLED_PROC AS called_procedure,
+        CALL_SEQ AS call_sequence
+      FROM ${IA_LIBRARY}.IAPGMCALLS
+      WHERE MBR_NAME = :program_name
+        AND :direction IN ('CALLEES', 'BOTH')
+      UNION ALL
+      SELECT
+        'CALLERS' AS direction,
+        MBR_NAME AS source_program,
+        CALLED_OBJCT AS target_program,
+        FROM_PROC AS calling_procedure,
+        CALLED_PROC AS called_procedure,
+        CALL_SEQ AS call_sequence
+      FROM ${IA_LIBRARY}.IAPGMCALLS
+      WHERE CALLED_OBJCT = :program_name
+        AND :direction IN ('CALLERS', 'BOTH')
+      ORDER BY direction, call_sequence
+      FETCH FIRST :limit ROWS ONLY
+
+  # ── 3. Field Impact — blast radius of changing a field ──────────────────
+  ia_field_impact:
+    name: ia-field-impact
+    source: ibmi
+    description: >
+      Analyze the blast radius of changing a specific field in a database file.
+      Returns all programs that reference the file, cross-referenced with field-level usage.
+      Critical before any field-level schema change (resize, rename, retype).
+      Combines IAALLREFPF (cross-references) with IAFIDTL (field details).
+    parameters:
+      - name: file_name
+        type: string
+        description: "Physical or logical file name (e.g., ORDERFILE)"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: field_name
+        type: string
+        description: "Field name to analyze (e.g., CUSTNO)"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: limit
+        type: integer
+        description: "Max results (default: 500)"
+        required: false
+        default: 500
+        min: 1
+        max: 5000
+    statement: |
+      SELECT DISTINCT
+        ref.OBJECT_NAME AS affected_object,
+        ref.OBJECT_TYPE AS object_type,
+        ref.OBJECT_ATTR AS object_attr,
+        ref.MAPED_FROM AS reference_type,
+        fld.FIELD_DATA_TYPE AS field_type,
+        fld.FIELD_USE_MODE AS field_usage
+      FROM ${IA_LIBRARY}.IAALLREFPF ref
+      LEFT JOIN ${IA_LIBRARY}.IAFIDTL fld
+        ON fld.MEMBER_NAME = ref.OBJECT_NAME
+        AND fld.FIELD_NAME_INTERNAL = :field_name
+      WHERE ref.REFERENCED_OBJ = :file_name
+      ORDER BY ref.OBJECT_TYPE, ref.OBJECT_NAME
+      FETCH FIRST :limit ROWS ONLY
+
+  # ── 4. Program Variables — all variables declared in a program ──────────
+  ia_program_variables:
+    name: ia-program-variables
+    source: ibmi
+    description: >
+      List all variables declared in a program/module with full type information.
+      Includes standalone fields, data structure subfields, indicators, and constants.
+      Queries IAPGMVARS — parsed from source code by iA's RPG/CL parser.
+    parameters:
+      - name: member_name
+        type: string
+        description: "Source member name (e.g., ORDHIST)"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: limit
+        type: integer
+        description: "Max results (default: 500)"
+        required: false
+        default: 500
+        min: 1
+        max: 5000
+    statement: |
+      SELECT
+        IAV_VAR AS variable_name,
+        IAV_TYP AS variable_type,
+        IAV_DTYP AS data_type,
+        IAV_LEN AS field_length,
+        IAV_DEC AS decimal_positions,
+        IAV_DIM AS array_dimension,
+        IAV_DSFLD AS ds_field_flag
+      FROM ${IA_LIBRARY}.IAPGMVARS
+      WHERE IAV_MBR = :member_name
+      ORDER BY IAV_VAR
+      FETCH FIRST :limit ROWS ONLY
