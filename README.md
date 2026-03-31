@@ -73,20 +73,36 @@ IA_LIBRARY=SDK01
 
 > **Security**: `.env` is in `.gitignore` — your credentials are never committed.
 
-### Step 3: Open in VS Code
+### Step 3: Start the MCP server
+
+Install and start the MCP server in a terminal:
+
+```bash
+npm install -g @ibm/ibmi-mcp-server
+npx @ibm/ibmi-mcp-server --transport http --tools ./impact-analysis.yaml
+```
+
+You should see output like:
+```
+IBM i MCP Server listening on http://localhost:3000
+```
+
+> **Keep this terminal running** — the MCP server must stay active while you use VS Code.
+
+> **Windows users**: If `npx` gives "Access is denied", use `node` directly:
+> ```bash
+> node %APPDATA%\npm\node_modules\@ibm\ibmi-mcp-server\dist\index.js --transport http --tools ./impact-analysis.yaml
+> ```
+
+### Step 4: Open in VS Code
 
 ```bash
 code .
 ```
 
-When VS Code opens the folder, it detects `.vscode/mcp.json` and automatically:
-1. Runs `npx -y @ibm/ibmi-mcp-server@latest` (downloads the MCP server if needed)
-2. Loads `impact-analysis.yaml` (all 4 iA tools)
-3. Connects to your IBM i using the `.env` credentials
+VS Code detects `.vscode/mcp.json` and connects to the running MCP server at `http://localhost:3000/mcp`. The 4 iA tools become available in Copilot Chat.
 
-> **First time?** The MCP server download may take a minute. You'll see a notification in VS Code when it's ready.
-
-### Step 4: Use iA tools in Copilot Chat
+### Step 5: Use iA tools in Copilot Chat
 
 1. **Open Copilot Chat**: Press `Ctrl+Alt+I` (Windows/Linux) or `Cmd+Alt+I` (Mac)
 2. **Switch to Agent mode**: Click the mode dropdown at the top of the chat panel and select **"Agent"**
@@ -199,10 +215,10 @@ ia_tool_name:
 ### Testing your changes
 
 1. **Edit** `impact-analysis.yaml` — add or modify a tool definition
-2. **Restart the MCP server** in VS Code:
-   - Open Command Palette: `Ctrl+Shift+P`
-   - Run: **"MCP: List Servers"**
-   - Select **ibmi-ia-tools** → **Restart**
+2. **Restart the MCP server** — stop it in your terminal (`Ctrl+C`) and start again:
+   ```bash
+   npx @ibm/ibmi-mcp-server --transport http --tools ./impact-analysis.yaml
+   ```
 3. **Test in Copilot Chat** — switch to Agent mode and ask a question that should trigger your tool
 4. **Verify** the SQL returns correct results and the response makes sense
 
@@ -274,13 +290,14 @@ These tools query the following iA repository tables (pre-parsed IBM i source me
 
 | Issue | Solution |
 |-------|----------|
-| `npx: Access is denied` (Windows) | Install globally instead: `npm install -g @ibm/ibmi-mcp-server`, then edit `.vscode/mcp.json` — change `"command"` to `"node"` and prepend the full path to `dist/index.js` in `"args"` |
+| `npx: Access is denied` (Windows) | Install globally: `npm install -g @ibm/ibmi-mcp-server`, then use `node %APPDATA%\npm\node_modules\@ibm\ibmi-mcp-server\dist\index.js --transport http --tools ./impact-analysis.yaml` |
 | MCP server not starting | Check Node.js version: `node --version` (must be 18+) |
 | Tools not showing in Copilot Chat | Make sure you're in **Agent** mode (not Ask or Edit mode). Click the tools icon to enable/disable specific tools |
+| Tools not connecting in VS Code | Ensure the MCP server is running in a separate terminal (`http://localhost:3000`) before opening VS Code |
 | `Connection refused` on port 8076 | Verify Mapepire is running on your IBM i — check with your system administrator |
 | Tools return no data | Check `IA_LIBRARY` in `.env` matches your iA library name. Verify the user profile has `*READ` authority to the iA tables |
 | YAML syntax error | Validate the file: `npx js-yaml impact-analysis.yaml` |
-| MCP server shows stale tools after edit | Restart the server: Command Palette → "MCP: List Servers" → select server → Restart |
+| MCP server shows stale tools after edit | Stop (`Ctrl+C`) and restart the MCP server in your terminal |
 
 ---
 
