@@ -8,13 +8,18 @@ Use them with **VS Code GitHub Copilot**, **Claude Code**, or any MCP-compatible
 
 | File | Description |
 |------|-------------|
-| `impact-analysis.yaml` | 6 MCP tool definitions for iA queries |
+| `impact-analysis.yaml` | MCP tool definitions for iA queries |
 | `AGENTS.md` | AI agent playbook — how to chain tools, interpret results, and ask follow-up questions like a senior IBM i developer |
+| `FileInfo.md` | Comprehensive reference for all 35+ iA repository tables with schemas, sample data, and use cases |
 | `.vscode/mcp.json` | VS Code MCP server config (auto-detected on open) |
 | `.env.example` | DB2i connection template |
 | `LICENSE` | Apache-2.0 |
 
-## Tools (6 custom + 2 built-in)
+### `/ia` Skill (for Claude Code)
+
+A token-efficient skill at `~/.claude/skills/ia/` that teaches AI agents how to query all 35+ iA tables via `execute_sql`. Install it once and invoke with `/ia` in any Claude Code session. See the [skill files](https://github.com/PIO-Anurag-Garg/ia-tools-ibmi) for details.
+
+## Tools (27 custom + 2 built-in)
 
 ### Custom iA Tools (defined in `impact-analysis.yaml`)
 
@@ -24,8 +29,29 @@ Use them with **VS Code GitHub Copilot**, **Claude Code**, or any MCP-compatible
 | 2 | `ia_call_hierarchy` | Program call tree (CALLERS/CALLEES/BOTH) |
 | 3 | `ia_field_impact` | Blast radius of changing a field in a file |
 | 4 | `ia_program_variables` | All variables declared in a program |
-| 5 | `ia_where_used_detail` | Enhanced where-used with source existence check |
-| 6 | `ia_library_files` | List all files/tables in the iA library |
+| 5 | `ia_data_structures` | Data structure definitions and subfields |
+| 6 | `ia_call_parameters` | Parameters passed at each external call site |
+| 7 | `ia_subroutines` | BEGSR/EXSR details with usage counts |
+| 8 | `ia_file_overrides` | OVRDBF statements (real file routing) |
+| 9 | `ia_file_fields` | Field-level metadata for a database file |
+| 10 | `ia_object_list` | Repository inventory filtered by object type |
+| 11 | `ia_program_info` | Program/module metadata (source, compile info) |
+| 12 | `ia_rpg_source_tokens` | Token-level RPG source analysis |
+| 13 | `ia_cl_source_tokens` | Token-level CL source analysis |
+| 14 | `ia_dashboard` | Repository health summary by member category |
+| 15 | `ia_repo_config` | iA repository configuration settings |
+| 16 | `ia_exception_log` | iA parser exception log |
+| 17 | `ia_dds_to_ddl_status` | DDS→DDL conversion tracking |
+| 18 | `ia_reference_count` | Lightweight reference count grouped by type |
+| 19 | `ia_unused_objects` | Dead-code candidates (unreferenced objects) |
+| 20 | `ia_circular_deps` | Detect circular call chains |
+| 21 | `ia_where_used_detail` | Enhanced where-used with source-exist flag |
+| 22 | `ia_override_chain` | Chained OVRDBF dependencies (A→B→C) |
+| 23 | `ia_object_lifecycle` | Creation/change/last-used dates per object |
+| 24 | `ia_code_complexity` | Complexity metrics per source member |
+| 25 | `ia_library_files` | List all files/tables in the iA library |
+| 26 | `ia_object_lookup` | Look up object type, library, and attribute by name |
+| 27 | `ia_file_dependencies` | Find LFs, indexes, and views dependent on a physical file |
 
 ### Built-in MCP Server Tools
 
@@ -113,13 +139,13 @@ IBM i MCP Server listening on http://localhost:3000
 code .
 ```
 
-VS Code detects `.vscode/mcp.json` and connects to the running MCP server at `http://localhost:3000/mcp`. The 6 iA tools plus built-in SQL tools become available in Copilot Chat.
+VS Code detects `.vscode/mcp.json` and connects to the running MCP server at `http://localhost:3000/mcp`. The 26 iA tools plus built-in SQL tools become available in Copilot Chat.
 
 ### Step 5: Use iA tools in Copilot Chat
 
 1. **Open Copilot Chat**: Press `Ctrl+Alt+I` (Windows/Linux) or `Cmd+Alt+I` (Mac)
 2. **Switch to Agent mode**: Click the mode dropdown at the top of the chat panel and select **"Agent"**
-3. **Verify tools are loaded**: Click the **tools icon** (wrench/hammer) at the top-left of the chat input — you should see the 6 `ia-*` tools plus `execute_sql` and `describe_sql_object` listed under "ibmi-ia-tools"
+3. **Verify tools are loaded**: Click the **tools icon** (wrench/hammer) at the top-left of the chat input — you should see the 26 `ia-*` tools plus `execute_sql` and `describe_sql_object` listed under "ibmi-ia-tools"
 4. **Ask a question** — the agent will automatically pick the right iA tool:
 
 ```
@@ -316,7 +342,21 @@ These tools query the following iA repository tables (pre-parsed IBM i source me
 | `IAPGMCALLS` | Call graph: CALL, CALLP, bound module references |
 | `IAFILEDTL` | Field-level details for database files |
 | `IAPGMVARS` | Program variables (standalone, DS subfields, indicators) |
+| `IAPGMDS` | Data structure definitions and subfields |
+| `IACALLPARM` | Parameters passed at each call site |
+| `IASUBRDTL` | Subroutines (BEGSR/EXSR) with usage counts |
+| `IAOVRPF` | File overrides (OVRDBF) |
+| `IAPGMINF` | Program/module metadata and compile info |
+| `IAPGMREF` | RPG source token-level index |
+| `IACPGMREF` | CL source token-level index |
 | `IAOBJMAP` | Object-to-source member mapping |
+| `IAOBJECT` | Object lifecycle (create/change/last-used dates) |
+| `IAEXCPLOG` | iA parser exception log |
+| `OBJECT_DETAILS` | Object inventory (type, library, source) |
+| `IA_DASHBOARD_DETAIL` | Member categories, line counts, library map |
+| `IA_CODE_INFO` | Per-member complexity metrics |
+| `REPO_CONFIGURATION` | iA repo configuration settings |
+| `DDSTODDL_FILE_CONVERSION_DETAILS` | DDS→DDL modernization tracking |
 | `QSYS2.SYSTABLES` | System catalog: file/table inventory per library |
 
 ---
