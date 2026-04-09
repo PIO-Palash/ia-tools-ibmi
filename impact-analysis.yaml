@@ -1540,3 +1540,48 @@ tools:
         AND (:klist_name = '*ALL' OR KLIST_NAME = :klist_name)
       ORDER BY MEMBER_NAME, KLIST_NAME
       FETCH FIRST :limit ROWS ONLY
+
+  # ── Application Areas — scoped project analysis ─────────────────────────
+  ia_application_area:
+    name: ia-application-area
+    source: ibmi
+    description: >
+      List application areas (named project scopes) and optionally the objects
+      in each area. Use *LIST to see all defined areas, or provide an area name
+      to see its objects. Application areas enable scoped impact analysis —
+      filter queries to a specific project or subsystem.
+      Queries APPLICATION_AREA_HEADER and APPLICATION_AREA_OBJECT_DETAILS.
+    parameters:
+      - name: area_name
+        type: string
+        description: "Application area name, or *LIST to list all areas"
+        required: false
+        default: "*LIST"
+      - name: object_type
+        type: string
+        description: "Filter objects by type: *ALL, *PGM, *SRVPGM, *FILE (default: *ALL)"
+        required: false
+        default: "*ALL"
+      - name: limit
+        type: integer
+        description: "Max results (default: 500)"
+        required: false
+        default: 500
+        min: 1
+        max: 5000
+    statement: |
+      SELECT
+        h.APP_AREA_NAME AS area_name,
+        h.APP_AREA_DESC AS description,
+        COALESCE(d.OBJECT_NAME, '') AS object_name,
+        COALESCE(d.OBJECT_TYPE, '') AS object_type,
+        h.CREATED_USER AS created_by,
+        h.CREATED_TIMESTAMP AS created_on
+      FROM ${IA_LIBRARY}.APPLICATION_AREA_HEADER h
+      LEFT JOIN ${IA_LIBRARY}.APPLICATION_AREA_OBJECT_DETAILS d
+        ON h.APP_AREA_NAME = d.APP_AREA_NAME
+        AND (:area_name != '*LIST')
+      WHERE (:area_name = '*LIST' OR h.APP_AREA_NAME = :area_name)
+        AND (:object_type = '*ALL' OR d.OBJECT_TYPE = :object_type OR d.OBJECT_TYPE IS NULL)
+      ORDER BY h.APP_AREA_NAME, d.OBJECT_TYPE, d.OBJECT_NAME
+      FETCH FIRST :limit ROWS ONLY
