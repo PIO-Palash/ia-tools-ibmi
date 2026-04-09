@@ -52,7 +52,7 @@ Most iA questions can be answered with a single well-chosen tool. Before calling
 
 **Prefer dedicated `ia_*` MCP tools over `execute_sql`.** The repo ships 38 purpose-built tools that are parameter-validated, bounded, and tested. **Must only fall back** to `execute_sql` when no dedicated tool fits (then consult [references/sql-patterns.md](references/sql-patterns.md)).
 
-## Dedicated Tools (38)
+## Dedicated Tools (41)
 
 ### Discovery — start here
 | Tool | Purpose |
@@ -97,6 +97,9 @@ Most iA questions can be answered with a single well-chosen tool. Before calling
 ### Source-level analysis
 | Tool | Purpose |
 |------|---------|
+| `ia_rpg_source` | Read RPG source code line-by-line with optional spec-type filter (IAQRPGSRC) |
+| `ia_rpg_source_search` | Cross-member keyword search in RPG source (IAQRPGSRC) |
+| `ia_rpg_source_stats` | Modernization metrics: free-format %, comment ratio, cross-library (IAQRPGSRC) |
 | `ia_rpg_source_tokens` | Token-level RPG parse (IAPGMREF) |
 | `ia_cl_source_tokens` | Token-level CL parse (IACPGMREF) |
 
@@ -156,7 +159,10 @@ Most iA questions can be answered with a single well-chosen tool. Before calling
 | Repo health / member inventory? | `ia_dashboard` | — |
 | List tables in iA library? | `ia_library_files` | [#7](references/sql-patterns.md) |
 | Raw RPG/CL token stream? | `ia_rpg_source_tokens`, `ia_cl_source_tokens` | — |
-| Source code for member X? | `execute_sql` on IAQRPGSRC / IAQCLSRC / IAQDDSSRC | [#16, #17](references/sql-patterns.md) |
+| RPG source code for member X? | `ia_rpg_source` (optional `source_spec` filter) | — |
+| Search RPG source for keyword? | `ia_rpg_source_search` | — |
+| Modernization / format stats? | `ia_rpg_source_stats` (member or portfolio) | — |
+| CL/DDS source code for member X? | `execute_sql` on IAQCLSRC / IAQDDSSRC | [#16, #17](references/sql-patterns.md) |
 | Logical files over physical file X? | `ia_file_dependencies` | — |
 | Copybook change impact? | `ia_copybook_impact` | — |
 | SRVPGM exports/imports? | `ia_srvpgm_exports` | [#12](references/sql-patterns.md) |

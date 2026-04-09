@@ -71,6 +71,9 @@ A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to qu
 | 40 | `ia_sql_names` | Map SQL long names to system short names |
 | 41 | `ia_program_files` | List files used by a program with PREFIX details |
 | 42 | `ia_pseudocode` | Get AI-generated pseudocode for a program |
+| 43 | `ia_rpg_source` | Read RPG source code with optional spec-type filtering |
+| 44 | `ia_rpg_source_search` | Search RPG source across members for keywords |
+| 45 | `ia_rpg_source_stats` | Modernization stats: free-format vs fixed-format, comment ratio |
 
 ### Built-in MCP Server Tools
 
