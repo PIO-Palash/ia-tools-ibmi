@@ -10,6 +10,7 @@ Use them with **VS Code GitHub Copilot**, **Claude Code**, or any MCP-compatible
 |------|-------------|
 | `impact-analysis.yaml` | MCP tool definitions for iA queries |
 | `.claude/skills/ia/` | `/ia` skill for Claude Code — query guidance and SQL patterns |
+| `AGENTS.md` | Agent-specific guidance: always use `/ia` skill for iA analysis |
 | `.vscode/mcp.json` | VS Code MCP server config (auto-detected on open) |
 | `.env.example` | DB2i connection template |
 | `LICENSE` | Apache-2.0 |
@@ -18,7 +19,7 @@ Use them with **VS Code GitHub Copilot**, **Claude Code**, or any MCP-compatible
 
 A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to query all 35+ iA tables. Invoke with `/ia` in any Claude Code session. The skill includes table schemas, SQL patterns, and query workflows in its `references/` folder.
 
-## Tools (44 custom + 2 built-in)
+## Tools (45 custom + 2 built-in)
 
 ### Custom iA Tools (defined in `impact-analysis.yaml`)
 
@@ -33,7 +34,7 @@ A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to qu
 | 7 | `ia_subroutines` | BEGSR/EXSR details with usage counts |
 | 8 | `ia_file_overrides` | OVRDBF statements (real file routing) |
 | 9 | `ia_file_fields` | Field-level metadata for a database file |
-| 10 | `ia_object_list` | Repository inventory filtered by object type |
+| 10 | `ia_object_list` | Repository inventory filtered by object type and attribute |
 | 11 | `ia_program_info` | Program/module metadata (source, compile info) |
 | 12 | `ia_program_summary` | Quick program overview with compile info and complexity |
 | 13 | `ia_program_detail` | Deep structural analysis (calls, files, subroutines, variables) |
@@ -60,6 +61,7 @@ A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to qu
 | # | Tool | Description |
 |---|------|-------------|
 | 31 | `ia_copybook_impact` | Find programs including a copybook via /COPY |
+| 46 | `ia_member_copybooks` | List copybooks used by a source member |
 | 32 | `ia_srvpgm_exports` | List service program exported/imported procedures |
 | 33 | `ia_procedure_xref` | Procedure-level cross-reference (callers/callees) |
 | 34 | `ia_procedure_params` | Get procedure PR/PI parameter signatures |
@@ -73,6 +75,7 @@ A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to qu
 | 42 | `ia_rpg_source_search` | Search RPG source across members for keywords |
 | 43 | `ia_rpg_source_stats` | Modernization stats: free-format vs fixed-format, comment ratio |
 | 44 | `ia_member_lookup` | Look up source member metadata and verify existence |
+| 45 | `ia_object_references` | Find what an object references/contains (inverse of ia_where_used) |
 
 ### Built-in MCP Server Tools
 

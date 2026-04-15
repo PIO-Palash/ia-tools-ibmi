@@ -381,7 +381,7 @@ tools:
     name: ia-object-list
     source: ibmi
     description: >
-      List all objects in the iA repository with metadata: type, library,
+      List all objects in the iA repository with metadata: type, attribute, library,
       source file/member, creation date, and exclusion status.
       Use to discover available objects before running impact analysis.
       Queries OBJECT_DETAILS — the master object inventory.
@@ -389,6 +389,11 @@ tools:
       - name: object_type
         type: string
         description: "Filter: *ALL, *PGM, *SRVPGM, *FILE, *DSPF, *CMD, *DTAARA, *MODULE (default: *ALL)"
+        required: false
+        default: "*ALL"
+      - name: object_attribute
+        type: string
+        description: "Filter by attribute: *ALL, RPGLE, CLLE, RPG, CLP, CLE, PF, LF, DSPF, PRTF (default: *ALL)"
         required: false
         default: "*ALL"
       - name: limit
@@ -400,12 +405,13 @@ tools:
         max: 5000
     statement: |
       SELECT
-        OBJECT_NAME, OBJECT_TYPE, OBJECT_LIBRARY,
+        OBJECT_NAME, OBJECT_TYPE, OBJECT_ATTRIBUTE, OBJECT_LIBRARY,
         SOURCE_FILE, SOURCE_MEMBER,
         CREATION_DATE, EXCLUDED_FLAG
       FROM ${IA_LIBRARY}.OBJECT_DETAILS
       WHERE (:object_type = '*ALL' OR OBJECT_TYPE = :object_type)
-      ORDER BY OBJECT_TYPE, OBJECT_NAME
+        AND (:object_attribute = '*ALL' OR OBJECT_ATTRIBUTE = :object_attribute)
+      ORDER BY OBJECT_TYPE, OBJECT_ATTRIBUTE, OBJECT_NAME
       FETCH FIRST :limit ROWS ONLY
 
   # ── 11. Program Info — program/module metadata ──────────────────────────
@@ -1798,4 +1804,94 @@ tools:
         AND (:source_library = '*ALL' OR SOURCE_LIBRARY = :source_library)
         AND (:member_type = '*ALL' OR MEMBER_TYPE = :member_type)
       ORDER BY MEMBER_NAME, SOURCE_LIBRARY, SOURCE_FILE
+      FETCH FIRST :limit ROWS ONLY
+
+  # ── 45. Object References — what an object references/contains ────────────
+  ia_object_references:
+    name: ia-object-references
+    source: ibmi
+    maxDisplayRows: 1000
+    description: >
+      Find all objects that a given object references, uses, or contains.
+      Inverse of ia_where_used: shows what an object depends ON rather than
+      what depends on IT. Use cases: modules bound into *PGM/*SRVPGM,
+      service programs in a *BNDDIR, files used by a program, etc.
+      Queries the iA IAALLREFPF cross-reference table.
+    parameters:
+      - name: object_name
+        type: string
+        description: "Object name to find references FROM (e.g., IABNDDIR, MYPGM)"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: referenced_type
+        type: string
+        description: "Filter referenced objects by type: *ALL, *MODULE, *SRVPGM, *FILE, *PGM, *BNDDIR, *DTAARA (default: *ALL)"
+        required: false
+        default: "*ALL"
+      - name: limit
+        type: integer
+        description: "Max results (default: 200)"
+        required: false
+        default: 200
+        min: 1
+        max: 5000
+    statement: |
+      SELECT DISTINCT
+        OBJECT_NAME AS source_object,
+        OBJECT_TYPE AS source_type,
+        OBJECT_ATTR AS source_attr,
+        REFERENCED_OBJ AS referenced_object,
+        REFERENCED_OBJTYP AS referenced_type,
+        REFERENCED_OBJLIB AS referenced_library,
+        MAPED_FROM AS reference_source
+      FROM ${IA_LIBRARY}.IAALLREFPF
+      WHERE OBJECT_NAME = :object_name
+        AND (:referenced_type = '*ALL' OR REFERENCED_OBJTYP = :referenced_type)
+      ORDER BY REFERENCED_OBJTYP, REFERENCED_OBJ
+      FETCH FIRST :limit ROWS ONLY
+
+  # ── 46. Member Copybooks — copybooks used by a source member ───────────────
+  ia_member_copybooks:
+    name: ia-member-copybooks
+    source: ibmi
+    description: >
+      List all copybooks included by a source member via /COPY or /INCLUDE.
+      Inverse of ia_copybook_impact: shows what copybooks a member USES rather
+      than what members use a copybook. Essential for understanding a program's
+      dependencies and ensuring all required copybooks are available.
+      Queries COPYBOOK_MEMBER_DETAIL.
+    parameters:
+      - name: member_name
+        type: string
+        description: "Source member name (e.g., IORDV11, IAPCOD01SV)"
+        required: true
+        minLength: 1
+        maxLength: 10
+      - name: member_library
+        type: string
+        description: "Filter by member library (default: *ALL for all libraries)"
+        required: false
+        default: "*ALL"
+      - name: limit
+        type: integer
+        description: "Max results (default: 200)"
+        required: false
+        default: 200
+        min: 1
+        max: 1000
+    statement: |
+      SELECT
+        RTRIM(COPYBOOK_MEMBER_NAME) AS copybook_name,
+        RTRIM(COPYBOOK_MEMBER_LIBRARY) AS copybook_library,
+        RTRIM(COPYBOOK_SOURCE_FILE) AS copybook_source_file,
+        MEMBER_RRN_NUMBER AS copy_line_number,
+        RTRIM(COPYBOOK_DIRECTIVES) AS directive,
+        RTRIM(MEMBER_NAME) AS member_name,
+        RTRIM(MEMBER_LIBRARY) AS member_library,
+        RTRIM(MEMBER_TYPE) AS member_type
+      FROM ${IA_LIBRARY}.COPYBOOK_MEMBER_DETAIL
+      WHERE MEMBER_NAME = :member_name
+        AND (:member_library = '*ALL' OR MEMBER_LIBRARY = :member_library)
+      ORDER BY MEMBER_RRN_NUMBER
       FETCH FIRST :limit ROWS ONLY
