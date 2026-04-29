@@ -1,5 +1,5 @@
 # Impact Analysis (iA) Tools for IBM i
-# Source: programmers.io ia-mcp-server — 44 tools for code impact analysis
+# Source: programmers.io ia-mcp-server — 47 tools for code impact analysis
 # These tools query the iA repository tables (pre-parsed IBM i source metadata).
 #
 # IMPORTANT: The library is configured via the IA_LIBRARY environment variable.
@@ -87,6 +87,9 @@ tools:
       Generate the call tree for a program — who calls it (CALLERS), what it calls
       (CALLEES), or both. Includes procedure-level detail and call sequence numbers.
       Queries IAPGMCALLS — captures CALL, CALLP, and bound module references.
+      For CALLERS direction, searches both CALLED_OBJCT (program-level calls) and
+      CALLED_PROC (procedure-level calls) — use this to find callers of a procedure
+      like IAEXCTIMR that is stored in CALLED_PROC rather than CALLED_OBJCT.
     parameters:
       - name: program_name
         type: string
@@ -126,22 +129,29 @@ tools:
         CALLED_PROC AS called_procedure,
         CALL_SEQ AS call_sequence
       FROM ${IA_LIBRARY}.IAPGMCALLS
-      WHERE CALLED_OBJCT = :program_name
+      WHERE (CALLED_OBJCT = :program_name OR CALLED_PROC = :program_name)
         AND :direction IN ('CALLERS', 'BOTH')
       ORDER BY direction, call_sequence
       FETCH FIRST :limit ROWS ONLY
 
   # ── 3. Field Impact — blast radius of changing a field ──────────────────
-  ia_field_impact:
-    name: ia-field-impact
+  ia_file_field_impact_analysis:
+    name: ia-file-field-impact-analysis
     source: ibmi
     fetchAllRows: true
     maxDisplayRows: 1000
     description: >
       Analyze the blast radius of changing a specific field in a database file.
-      Returns all programs that reference the file, cross-referenced with field-level usage.
-      Critical before any field-level schema change (resize, rename, retype).
-      Combines IAALLREFPF (cross-references) with IAFILEDTL (field details).
+      Returns all objects that directly reference the file, classified by impact_type:
+      NEEDS_CHANGE (field found explicitly in RPG or CL source),
+      NEEDS_RECOMPILE (implicit record-format access, or *SRVPGM — source check unreliable),
+      STRUCTURAL (*FILE and *DSPF objects that inherit field definitions via DDS REF).
+      Also returns field metadata (type, length, decimals) from IAFILEDTL.
+      NOTE: Does NOT include programs that access the file via a logical file (LF).
+      For full blast radius, chain: ia_file_dependencies to find LFs, then
+      ia_find_object_usages on each LF to find LF-dependent programs.
+      Combines IAALLREFPF (cross-references), IAFILEDTL (field details),
+      IAQRPGSRC (RPG source search), and IAQCLSRC (CL source search).
     parameters:
       - name: file_name
         type: string
@@ -173,13 +183,33 @@ tools:
         ref.FILE_USAGES AS file_usage,
         ref.MAPED_FROM AS reference_type,
         fld.FIELD_DATA_TYPE AS field_type,
-        fld.FIELD_USE_MODE AS field_usage
+        fld.FIELD_LENGTH AS field_length,
+        fld.FIELD_DEC_POS AS decimal_positions,
+        CASE
+          WHEN ref.OBJECT_TYPE IN ('*FILE', '*DSPF') THEN 'STRUCTURAL'
+          WHEN ref.OBJECT_TYPE = '*SRVPGM'           THEN 'NEEDS_RECOMPILE'
+          WHEN src_rpg.MEMBER_NAME IS NOT NULL        THEN 'NEEDS_CHANGE'
+          WHEN src_cl.MEMBER_NAME  IS NOT NULL        THEN 'NEEDS_CHANGE'
+          ELSE 'NEEDS_RECOMPILE'
+        END AS impact_type
       FROM ${IA_LIBRARY}.IAALLREFPF ref
       LEFT JOIN ${IA_LIBRARY}.IAFILEDTL fld
-        ON fld.MEMBER_NAME = ref.OBJECT_NAME
+        ON fld.FILE_NAME = :file_name
         AND fld.FIELD_NAME_INTERNAL = :field_name
+      LEFT JOIN (
+        SELECT DISTINCT MEMBER_NAME
+        FROM ${IA_LIBRARY}.IAQRPGSRC
+        WHERE SOURCE_DATA LIKE '%' || :field_name || '%'
+      ) src_rpg ON src_rpg.MEMBER_NAME = ref.OBJECT_NAME
+        AND ref.OBJECT_ATTR IN ('RPGLE', 'SQLRPGLE', 'RPG', 'RPG38', 'RPGII', 'RPGILE')
+      LEFT JOIN (
+        SELECT DISTINCT MEMBER_NAME
+        FROM ${IA_LIBRARY}.IAQCLSRC
+        WHERE SOURCE_DATA LIKE '%' || :field_name || '%'
+      ) src_cl ON src_cl.MEMBER_NAME = ref.OBJECT_NAME
+        AND ref.OBJECT_ATTR IN ('CLLE', 'CLE', 'CL', 'CL38')
       WHERE ref.REFERENCED_OBJ = :file_name
-      ORDER BY ref.OBJECT_TYPE, ref.OBJECT_NAME
+      ORDER BY impact_type, ref.OBJECT_TYPE, ref.OBJECT_NAME
       FETCH FIRST :limit ROWS ONLY
 
   # ── 4. Program Variables — all variables declared in a program ──────────
@@ -199,6 +229,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 500)"
@@ -208,15 +243,18 @@ tools:
         max: 5000
     statement: |
       SELECT
+        IAV_LIB AS library,
         IAV_VAR AS variable_name,
         IAV_TYP AS variable_type,
         IAV_DTYP AS data_type,
         IAV_LEN AS field_length,
         IAV_DEC AS decimal_positions,
-        IAV_DIM AS array_dimension
+        IAV_DIM AS array_dimension,
+        IAV_KWVAL AS constant_value
       FROM ${IA_LIBRARY}.IAPGMVARS
       WHERE IAV_MBR = :member_name
-      ORDER BY IAV_VAR
+        AND (:library = '*ALL' OR IAV_LIB = :library)
+      ORDER BY IAV_LIB, IAV_VAR
       FETCH FIRST :limit ROWS ONLY
 
   # ── 5. Data Structures — DS definitions with subfields ──────────────────
@@ -238,6 +276,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 500)"
@@ -247,6 +290,7 @@ tools:
         max: 5000
     statement: |
       SELECT
+        LIBRARY_NAME AS library,
         DATASTR_NAME AS ds_name,
         DATASTR_TYPE AS ds_type,
         DS_FLD_NAME AS field_name,
@@ -258,7 +302,8 @@ tools:
         DS_QUALFLG AS qualified_flag
       FROM ${IA_LIBRARY}.IAPGMDS
       WHERE MEMBER_NAME = :member_name
-      ORDER BY DATASTR_NAME, DS_FLD_RANK
+        AND (:library = '*ALL' OR LIBRARY_NAME = :library)
+      ORDER BY LIBRARY_NAME, DATASTR_NAME, DS_FLD_RANK
       FETCH FIRST :limit ROWS ONLY
 
   # ── 6. Call Parameters — parameters passed to external calls ────────────
@@ -270,7 +315,9 @@ tools:
     description: >
       Get parameter details for all external calls made by a program.
       Shows what data is passed to each called program/procedure.
-      Queries IACALLPARM — parameter names, types, and lengths.
+      Queries IACALLPARM — parameter names (PARM_NAME) and call sequence are
+      reliably populated. PARM_TYPE and PARM_LENGTH depend on iA parser version
+      and call type; they may be null for CALL/CALLP statements.
     parameters:
       - name: member_name
         type: string
@@ -278,6 +325,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 500)"
@@ -287,6 +339,7 @@ tools:
         max: 5000
     statement: |
       SELECT
+        MBR_LIB AS library,
         CALLED_OBJECT AS called_program,
         PARM_NAME AS parameter_name,
         PARM_TYPE AS parameter_type,
@@ -294,7 +347,8 @@ tools:
         CALL_SEQ AS call_sequence
       FROM ${IA_LIBRARY}.IACALLPARM
       WHERE MBR_NAME = :member_name
-      ORDER BY CALLED_OBJECT, CALL_SEQ
+        AND (:library = '*ALL' OR MBR_LIB = :library)
+      ORDER BY MBR_LIB, CALLED_OBJECT, CALL_SEQ
       FETCH FIRST :limit ROWS ONLY
 
   # ── 7. Subroutines — BEGSR/ENDSR details with usage counts ─────────────
@@ -315,6 +369,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 200)"
@@ -324,6 +383,7 @@ tools:
         max: 5000
     statement: |
       SELECT
+        MBR_LIB AS library,
         SR_SBR_NAME AS subroutine_name,
         SR_OPCODE AS opcode,
         SR_CNT AS usage_count,
@@ -331,7 +391,8 @@ tools:
       FROM ${IA_LIBRARY}.IASUBRDTL
       WHERE MBR_NAME = :member_name
         AND SR_OPCODE = 'BEGSR'
-      ORDER BY SR_SBR_NAME
+        AND (:library = '*ALL' OR MBR_LIB = :library)
+      ORDER BY MBR_LIB, SR_SBR_NAME
       FETCH FIRST :limit ROWS ONLY
 
   # ── 8. File Overrides — OVRDBF statements (file routing) ───────────────
@@ -475,29 +536,6 @@ tools:
       ORDER BY OBJECT_TYPE, OBJECT_ATTRIBUTE, OBJECT_NAME
       FETCH FIRST :limit ROWS ONLY
 
-  # ── 11. Program Info — program/module metadata ──────────────────────────
-  ia_program_info:
-    name: ia-program-info
-    source: ibmi
-    fetchAllRows: true
-    maxDisplayRows: 1000
-    description: >
-      Get detailed metadata for a program or module: source file, member,
-      attributes, and last change date. Queries IAPGMINF.
-    parameters:
-      - name: program_name
-        type: string
-        description: "Program or module name"
-        required: true
-        minLength: 1
-        maxLength: 10
-    statement: |
-      SELECT
-        PGM_NAME, MOD_NAME, SRC_FILE, SRC_MBR,
-        MOD_ATTRIB, SRC_UPDDATE
-      FROM ${IA_LIBRARY}.IAPGMINF
-      WHERE PGM_NAME = :program_name OR MOD_NAME = :program_name
-
   # ── 12. Program Summary — quick program overview ──────────────────────────
   ia_program_summary:
     name: ia-program-summary
@@ -506,8 +544,8 @@ tools:
     maxDisplayRows: 1000
     description: >
       Quick overview of a program — metadata, compile info, and complexity metrics.
-      Provides a concise summary in a single query. Queries IAPGMINF, IA_CODE_INFO,
-      and IASRCMBRID.
+      Provides a concise summary in a single query. Supersedes ia_program_info.
+      Queries IAPGMINF, IA_CODE_INFO, and IASRCMBRID.
     parameters:
       - name: program_name
         type: string
@@ -515,6 +553,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 100)"
@@ -552,8 +595,8 @@ tools:
         ON c.MEMBER_NAME = i.SRC_MBR
       LEFT JOIN ${IA_LIBRARY}.IASRCMBRID m
         ON m.MEMBER_NAME = i.SRC_MBR
-      WHERE i.PGM_NAME = :program_name
-        OR i.MOD_NAME = :program_name
+      WHERE (i.PGM_NAME = :program_name OR i.MOD_NAME = :program_name)
+        AND (:library = '*ALL' OR i.PGM_LIB = :library)
       ORDER BY i.MOD_TYP, i.MOD_NAME
       FETCH FIRST :limit ROWS ONLY
 
@@ -692,7 +735,7 @@ tools:
         MBR_BLNK_LOC AS blank_lines
       FROM ${IA_LIBRARY}.IASRCMBRID
       WHERE MEMBER_NAME = :member_name
-      ORDER BY MEMBER_NAME
+      ORDER BY MEMBER_LIB, MBR_SRC_PF
       FETCH FIRST :limit ROWS ONLY
 
    # ── 15. RPG Source Tokens — token-level RPG source analysis ──────────────
@@ -806,10 +849,18 @@ tools:
     description: >
       Get the iA repository configuration settings (IFS locations, scan options, etc.).
       Queries REPO_CONFIGURATION.
-    parameters: []
+    parameters:
+      - name: limit
+        type: integer
+        description: "Max results (default: 200)"
+        required: false
+        default: 200
+        min: 1
+        max: 1000
     statement: |
       SELECT KEY_NAME1, KEY_VALUE1
       FROM ${IA_LIBRARY}.REPO_CONFIGURATION
+      FETCH FIRST :limit ROWS ONLY
 
   # ── 19. Exception Log — parser error log ──────────────────────────────────
   ia_exception_log:
@@ -882,6 +933,13 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: limit
+        type: integer
+        description: "Max results (default: 100)"
+        required: false
+        default: 100
+        min: 1
+        max: 1000
     statement: |
       SELECT
         REFERENCED_OBJ AS object_name,
@@ -891,6 +949,7 @@ tools:
       WHERE REFERENCED_OBJ = :object_name
       GROUP BY REFERENCED_OBJ, OBJECT_TYPE
       ORDER BY reference_count DESC
+      FETCH FIRST :limit ROWS ONLY
 
   # ── 22. Unused Objects — dead code candidates ─────────────────────────────
   ia_unused_objects:
@@ -907,6 +966,13 @@ tools:
         description: "Filter by type (*ALL, *PGM, *SRVPGM, *FILE)"
         required: false
         default: "*ALL"
+      - name: limit
+        type: integer
+        description: "Max results (default: 500)"
+        required: false
+        default: 500
+        min: 1
+        max: 5000
     statement: |
       SELECT
         od.OBJECT_NAME,
@@ -919,7 +985,7 @@ tools:
       WHERE ref.REFERENCED_OBJ IS NULL
         AND (:object_type = '*ALL' OR od.OBJECT_TYPE = :object_type)
       ORDER BY od.OBJECT_TYPE, od.OBJECT_NAME
-      FETCH FIRST 500 ROWS ONLY
+      FETCH FIRST :limit ROWS ONLY
 
   # ── 23. Circular Dependencies — detect circular call chains ──────────────
   ia_circular_deps:
@@ -930,7 +996,14 @@ tools:
     description: >
       Detect circular dependencies — programs that call each other directly
       or indirectly. These create maintenance risks and can cause infinite loops.
-    parameters: []
+    parameters:
+      - name: limit
+        type: integer
+        description: "Max results (default: 500)"
+        required: false
+        default: 500
+        min: 1
+        max: 5000
     statement: |
       SELECT DISTINCT
         a.MBR_NAME AS program_a,
@@ -941,6 +1014,7 @@ tools:
         ON a.CALLED_OBJCT = b.MBR_NAME
         AND b.CALLED_OBJCT = a.MBR_NAME
       ORDER BY program_a
+      FETCH FIRST :limit ROWS ONLY
 
   # ── 24. Override Chain — chained OVRDBF dependencies ─────────────────────
   ia_override_chain:
@@ -952,7 +1026,14 @@ tools:
       Find all file override chains — cases where file A is overridden to file B,
       which may itself be overridden to file C. These chains create hidden
       dependencies that are critical to understand.
-    parameters: []
+    parameters:
+      - name: limit
+        type: integer
+        description: "Max results (default: 500)"
+        required: false
+        default: 500
+        min: 1
+        max: 5000
     statement: |
       SELECT
         a.IOVR_MBR AS member,
@@ -965,6 +1046,7 @@ tools:
         ON a.IOVR_TO = b.IOVR_FROM
         AND a.IOVR_MBR = b.IOVR_MBR
       ORDER BY a.IOVR_MBR, a.IOVR_FROM
+      FETCH FIRST :limit ROWS ONLY
 
   # ── 25. Object Lifecycle — creation, change, and last-used dates ─────────
   ia_object_lifecycle:
@@ -1086,12 +1168,18 @@ tools:
     fetchAllRows: true
     maxDisplayRows: 1000
     description: >
-      List all files and tables in the iA repository library.
+      List all files and tables in an IBM i library.
       Shows file name, type (TABLE, VIEW, etc.), last altered date,
       and text description. Use this to discover available files before
-      querying their schema or data.
-      Queries QSYS2.SYSTABLES for the library configured in IA_LIBRARY.
+      querying their schema or data. Defaults to the configured IA_LIBRARY;
+      pass a library name (e.g., #AIDEMO, QSYS) to query any other library.
+      Queries QSYS2.SYSTABLES.
     parameters:
+      - name: library
+        type: string
+        description: "Library name to query (default: uses configured IA_LIBRARY). Pass any IBM i library name, e.g., #AIDEMO or QSYS."
+        required: false
+        default: ""
       - name: file_type
         type: string
         description: "Filter by type: *ALL, TABLE, VIEW, PHYSICAL, LOGICAL (default: *ALL)"
@@ -1111,7 +1199,7 @@ tools:
         TABLE_TEXT AS description,
         LAST_ALTERED_TIMESTAMP AS last_altered
       FROM QSYS2.SYSTABLES
-      WHERE TABLE_SCHEMA = '${IA_LIBRARY}'
+      WHERE TABLE_SCHEMA = CASE WHEN :library = '' THEN '${IA_LIBRARY}' ELSE UPPER(:library) END
         AND (:file_type = '*ALL' OR TABLE_TYPE = :file_type)
       ORDER BY TABLE_NAME
       FETCH FIRST :limit ROWS ONLY
@@ -1123,9 +1211,13 @@ tools:
     fetchAllRows: true
     maxDisplayRows: 1000
     description: >
-      Look up an object by name to find its type, library, and attribute.
-      Queries IAOBJMAP (object-to-source mapping table).
-      Supports % wildcards (e.g., %CUST%).
+      Resolve an object name to its type (*PGM, *FILE, *SRVPGM, etc.), owning library,
+      and attribute (RPGLE, LF, PF, etc.). Use this tool first when you need to
+      identify WHAT an object is or WHERE it lives — e.g. "what type is CUSTMAST?",
+      "which library contains ORDRPRC?", or "find all objects matching %CUST%".
+      Distinct from ia_object_lifecycle (which returns dates/usage counts) and
+      ia_object_list (which lists all objects in a library).
+      Supports % wildcards. Queries IAOBJMAP (object-to-source mapping table).
     parameters:
       - name: object_name
         type: string
@@ -1340,7 +1432,7 @@ tools:
     parameters:
       - name: procedure_name
         type: string
-        description: "Procedure name to analyze"
+        description: "Procedure name to analyze. Supports % wildcards (e.g., PROCESS%)."
         required: true
         minLength: 1
         maxLength: 256
@@ -1366,7 +1458,7 @@ tools:
         REFERENCED_OBJECT_NAME AS target_object,
         REFERENCED_PROCEDURE_NAME AS target_procedure
       FROM ${IA_LIBRARY}.PROCEDURE_REFERENCE_DETAIL
-      WHERE REFERENCED_PROCEDURE_NAME = :procedure_name
+      WHERE RTRIM(REFERENCED_PROCEDURE_NAME) LIKE :procedure_name
         AND :direction IN ('CALLERS', 'BOTH')
       UNION ALL
       SELECT
@@ -1378,7 +1470,7 @@ tools:
         REFERENCED_OBJECT_NAME AS target_object,
         REFERENCED_PROCEDURE_NAME AS target_procedure
       FROM ${IA_LIBRARY}.PROCEDURE_REFERENCE_DETAIL
-      WHERE PROCEDURE_NAME = :procedure_name
+      WHERE RTRIM(PROCEDURE_NAME) LIKE :procedure_name
         AND :direction IN ('CALLEES', 'BOTH')
       ORDER BY direction, caller_object
       FETCH FIRST :limit ROWS ONLY
@@ -1445,13 +1537,18 @@ tools:
     parameters:
       - name: procedure_name
         type: string
-        description: "Procedure name to look up"
+        description: "Procedure name to look up. Supports % wildcards (e.g., PROCESS% or %ORDER%)."
         required: true
         minLength: 1
         maxLength: 256
       - name: member_name
         type: string
-        description: "Filter by source member name (optional)"
+        description: "Filter by source member name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
         required: false
         default: "*ALL"
       - name: limit
@@ -1463,6 +1560,7 @@ tools:
         max: 1000
     statement: |
       SELECT
+        LIBRARY_NAME AS library,
         MEMBER_NAME,
         PROCEDURE_NAME,
         PR_PI_FLAG AS declaration_type,
@@ -1473,9 +1571,10 @@ tools:
         PARM_DEC_POS AS decimal_positions,
         KEYWORDS
       FROM ${IA_LIBRARY}.IAPRCPARM
-      WHERE PROCEDURE_NAME = :procedure_name
+      WHERE RTRIM(PROCEDURE_NAME) LIKE :procedure_name
         AND (:member_name = '*ALL' OR MEMBER_NAME = :member_name)
-      ORDER BY MEMBER_NAME, PR_PI_FLAG, PARAMETER_SEQ
+        AND (:library = '*ALL' OR LIBRARY_NAME = :library)
+      ORDER BY LIBRARY_NAME, MEMBER_NAME, PR_PI_FLAG, PARAMETER_SEQ
       FETCH FIRST :limit ROWS ONLY
 
   # ── 36. Variable Operations — assignments, declarations, BIFs ────────────
@@ -1486,7 +1585,7 @@ tools:
     maxDisplayRows: 1000
     description: >
       Find all operations involving a variable — declarations (DCL-DS, DCLVAR),
-      assignments (EVAL), comparisons, and BIF usage. Useful for tracing data
+      assignments (= operator), comparisons, and BIF usage. Useful for tracing data
       flow and understanding how a variable is used throughout a program.
       Queries IAVARREL.
     parameters:
@@ -1503,7 +1602,12 @@ tools:
         default: "*ALL"
       - name: opcode
         type: string
-        description: "Filter by opcode: *ALL, DCL-DS, DCLVAR, EVAL, etc. (default: *ALL)"
+        description: "Filter by opcode: *ALL, DCL-DS, DCLVAR, = (assignment), SQLEXC, CLEAR, RETURN, etc. (default: *ALL)"
+        required: false
+        default: "*ALL"
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
         required: false
         default: "*ALL"
       - name: limit
@@ -1515,6 +1619,7 @@ tools:
         max: 5000
     statement: |
       SELECT
+        LIBRARY_NAME AS library,
         MEMBER_NAME,
         OPCODE_NAME AS opcode,
         FACTOR1_VAL AS factor1,
@@ -1528,7 +1633,8 @@ tools:
              OR FACTOR2_VAL = :variable_name
              OR RESULT_VAL = :variable_name)
         AND (:opcode = '*ALL' OR OPCODE_NAME = :opcode)
-      ORDER BY MEMBER_NAME
+        AND (:library = '*ALL' OR LIBRARY_NAME = :library)
+      ORDER BY LIBRARY_NAME, MEMBER_NAME
       FETCH FIRST :limit ROWS ONLY
 
   # ── 37. Key List Usage — KLIST/KFLD definitions ──────────────────────────
@@ -1553,6 +1659,11 @@ tools:
         description: "Key list name to search for, or *ALL"
         required: false
         default: "*ALL"
+      - name: kfld_name
+        type: string
+        description: "Key field name to filter by, or *ALL. Supports % wildcards (e.g., DB% matches all fields starting with DB)."
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 500)"
@@ -1570,6 +1681,7 @@ tools:
       FROM ${IA_LIBRARY}.IAPGMKLIST
       WHERE (:member_name = '*ALL' OR MEMBER_NAME = :member_name)
         AND (:klist_name = '*ALL' OR KLIST_NAME = :klist_name)
+        AND (:kfld_name = '*ALL' OR RTRIM(KFLD_NAME) LIKE :kfld_name)
       ORDER BY MEMBER_NAME, KLIST_NAME
       FETCH FIRST :limit ROWS ONLY
 
@@ -1581,9 +1693,11 @@ tools:
     maxDisplayRows: 1000
     description: >
       List application areas (named project scopes) and optionally the objects
-      in each area. Use *LIST to see all defined areas, or provide an area name
-      to see its objects. Application areas enable scoped impact analysis —
-      filter queries to a specific project or subsystem.
+      in each area. Supports three modes:
+      (1) *LIST: list all defined areas (no object_name needed);
+      (2) area_name=MYAREA: show all objects in that area;
+      (3) object_name=CUSTMAST: reverse lookup — find which areas contain that object (supports % wildcards).
+      Application areas enable scoped impact analysis — filter queries to a specific project or subsystem.
       Queries APPLICATION_AREA_HEADER and APPLICATION_AREA_OBJECT_DETAILS.
     parameters:
       - name: area_name
@@ -1591,6 +1705,11 @@ tools:
         description: "Application area name, or *LIST to list all areas"
         required: false
         default: "*LIST"
+      - name: object_name
+        type: string
+        description: "Reverse lookup: find which areas contain this object. Supports % wildcards. Use *ALL to skip this filter (default: *ALL)."
+        required: false
+        default: "*ALL"
       - name: object_type
         type: string
         description: "Filter objects by type: *ALL, *PGM, *SRVPGM, *FILE (default: *ALL)"
@@ -1614,8 +1733,9 @@ tools:
       FROM ${IA_LIBRARY}.APPLICATION_AREA_HEADER h
       LEFT JOIN ${IA_LIBRARY}.APPLICATION_AREA_OBJECT_DETAILS d
         ON h.APP_AREA_NAME = d.APP_AREA_NAME
-        AND (:area_name != '*LIST')
+        AND (:area_name != '*LIST' OR :object_name != '*ALL')
       WHERE (:area_name = '*LIST' OR h.APP_AREA_NAME = :area_name)
+        AND (:object_name = '*ALL' OR d.OBJECT_NAME LIKE :object_name)
         AND (:object_type = '*ALL' OR d.OBJECT_TYPE = :object_type OR d.OBJECT_TYPE IS NULL)
       ORDER BY h.APP_AREA_NAME, d.OBJECT_TYPE, d.OBJECT_NAME
       FETCH FIRST :limit ROWS ONLY
@@ -1688,6 +1808,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: library
+        type: string
+        description: "Filter by library name (optional, default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: limit
         type: integer
         description: "Max results (default: 100)"
@@ -1712,6 +1837,7 @@ tools:
         INDICATOR_DATASTR AS indicator_ds
       FROM ${IA_LIBRARY}.PROGRAM_TO_FILE_MAPPING_DETAILS
       WHERE MEMBER_NAME = :member_name
+        AND (:library = '*ALL' OR LIBRARY = :library)
       ORDER BY ACTUAL_FILE
       FETCH FIRST :limit ROWS ONLY
 
@@ -1944,6 +2070,7 @@ tools:
       Inverse of ia_find_object_usages: shows what an object depends ON rather than
       what depends on IT. Use cases: modules bound into *PGM/*SRVPGM,
       service programs in a *BNDDIR, files used by a program, etc.
+      Use object_type to disambiguate when the same name exists as *PGM and *SRVPGM.
       Queries the iA IAALLREFPF cross-reference table.
     parameters:
       - name: object_name
@@ -1952,6 +2079,11 @@ tools:
         required: true
         minLength: 1
         maxLength: 10
+      - name: object_type
+        type: string
+        description: "Filter source object by type: *ALL, *PGM, *SRVPGM, *MODULE, *FILE, *BNDDIR (default: *ALL)"
+        required: false
+        default: "*ALL"
       - name: referenced_type
         type: string
         description: "Filter referenced objects by type: *ALL, *MODULE, *SRVPGM, *FILE, *PGM, *BNDDIR, *DTAARA (default: *ALL)"
@@ -1966,7 +2098,6 @@ tools:
         max: 5000
     statement: |
       SELECT DISTINCT
-        LIBRARY_NAME AS source_library,
         OBJECT_NAME AS source_object,
         OBJECT_TYPE AS source_type,
         OBJECT_ATTR AS source_attr,
@@ -1978,6 +2109,7 @@ tools:
         MAPED_FROM AS reference_source
       FROM ${IA_LIBRARY}.IAALLREFPF
       WHERE OBJECT_NAME = :object_name
+        AND (:object_type = '*ALL' OR OBJECT_TYPE = :object_type)
         AND (:referenced_type = '*ALL' OR REFERENCED_OBJTYP = :referenced_type)
       ORDER BY REFERENCED_OBJTYP, REFERENCED_OBJ
       FETCH FIRST :limit ROWS ONLY

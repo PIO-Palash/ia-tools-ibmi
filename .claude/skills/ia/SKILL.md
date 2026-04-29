@@ -18,7 +18,7 @@ Most iA questions can be answered with a single well-chosen tool. Before calling
 | User Intent | Single Best Tool | Returns |
 |-------------|------------------|---------|
 | "What uses X?" | `ia_find_object_usages` | Referencing objects with library, usage type, file usage |
-| "Impact of field change?" | `ia_field_impact` | Affected programs + usage type |
+| "Impact of field change?" | `ia_file_field_impact_analysis` | Affected programs + impact_type (NEEDS_CHANGE / NEEDS_RECOMPILE) + field metadata |
 | "LFs/views over file X?" | `ia_file_dependencies` | All dependent logical files, indexes, views |
 | "Tell me about program X" | `ia_program_detail` (section=*ALL) | Calls, files, subs, vars, overrides — ALL in one query |
 | "Call tree for X?" | `ia_call_hierarchy` | Callers + callees |
@@ -85,7 +85,7 @@ FETCH FIRST 10000 ROWS ONLY
 - "Show file declarations" → Use SQL with `SOURCE_SPEC = 'F'`
 - "Show data definitions" → Use SQL with `SOURCE_SPEC = 'D'`
 
-**For other tools (ia_find_object_usages, ia_field_impact, etc.):**
+**For other tools (ia_find_object_usages, ia_file_field_impact_analysis, etc.):**
 - If results hit the limit, tell user: "Showing first N results. There may be more — increase limit?"
 - **If you anticipate >100 rows upfront:** Skip the dedicated tool. Use `execute_sql` directly with the SQL pattern from [references/sql-patterns.md](references/sql-patterns.md). This avoids truncation surprises.
 
@@ -93,10 +93,21 @@ FETCH FIRST 10000 ROWS ONLY
 
 **DO chain** when you see `*SRVPGM` in results — service programs are amplifiers; check what binds to them.
 
-**DO chain for field impact:** Logical files and views built over a physical file **propagate field changes** to all programs using those LFs. When analyzing field changes, always ask the user if they want the full blast radius including LF-dependent programs:
-1. `ia_field_impact` → direct references to the PF
-2. `ia_file_dependencies` → LFs/views over the PF
-3. `ia_find_object_usages` on each LF → programs using those LFs
+**DO auto-chain for field impact (run all steps, then synthesize into one response):**
+1. `ia_file_field_impact_analysis(file_name=X, field_name=Y)` → direct references to the PF (*PGM, *SRVPGM, *DSPF, *FILE); classified as NEEDS_CHANGE / NEEDS_RECOMPILE / STRUCTURAL
+2. `ia_file_dependencies(file_name=X)` → LFs / indexes / views over the PF
+3. **Always** run `ia_find_object_usages` on every STRUCTURAL `*FILE` from step 1 (e.g., a PF that inherits the field via DDS `REF`) — programs using that file need recompile too
+4. `ia_find_object_usages(object_name=<each_LF>)` [run in parallel for multiple LFs] → programs using LFs from step 2
+
+Steps 3 and 4 can run in parallel. Skip a step only if there are no objects to look up (no STRUCTURAL files, no LFs).
+
+Present as one response with four sections:
+- **Directly references PF:** NEEDS_CHANGE / NEEDS_RECOMPILE from step 1 (*PGM, *SRVPGM)
+- **Structural dependents (rebuild required):** STRUCTURAL *FILE/*DSPF from step 1 + LFs from step 2
+- **Programs via STRUCTURAL files:** NEEDS_RECOMPILE from step 3 (deduplicate against step 1 list)
+- **Programs via LF:** NEEDS_CHANGE / NEEDS_RECOMPILE from step 4
+
+**impact_type notes:** `*SRVPGM` always shows NEEDS_RECOMPILE (source member name unreliable for search). CL programs now correctly checked via IAQCLSRC — those with the field in source show NEEDS_CHANGE. `STRUCTURAL` means rebuild/recreate, not just recompile. A STRUCTURAL `*FILE` is itself a blast-radius amplifier — always chase its dependents.
 
 **DON'T chain** for:
 - Simple counts (just count your results)
@@ -122,11 +133,11 @@ FETCH FIRST 10000 ROWS ONLY
 ### Discovery — start here
 | Tool | Purpose |
 |------|---------|
-| `ia_library_files` | List every file/table in the iA repository library |
+| `ia_library_files` | List every file/table in any IBM i library (default: configured IA_LIBRARY; pass `library=#AIDEMO` to query other libraries including `#` names) |
 | `ia_object_lookup` | Resolve an object name → type, library, attribute (wildcard with `%`) |
 | `ia_member_lookup` | Source member metadata and existence check (file, library, type, timestamps) |
 | `ia_object_list` | Inventory objects by type (`*PGM`, `*SRVPGM`, `*FILE`, ...) |
-| `ia_program_info` | Program/module metadata: source file, member, attribs, last change |
+| `ia_program_summary` | Program overview: metadata, compile info, complexity metrics, library filter |
 | `ia_dashboard` | Repo health summary: categories, line counts, library map |
 | `ia_repo_config` | iA repository configuration settings |
 
@@ -136,7 +147,7 @@ FETCH FIRST 10000 ROWS ONLY
 | `ia_find_object_usages` | Broad where-used: all objects referencing `object_name` (optional type + library filter) |
 | `ia_object_references` | Inverse of ia_find_object_usages: what an object references/contains (modules in SRVPGM, SRVPGMs in BNDDIR, files used) |
 | `ia_reference_count` | Lightweight: counts of references grouped by type |
-| `ia_field_impact` | Field-level blast radius: programs affected if field X in file Y changes |
+| `ia_file_field_impact_analysis` | Field-level blast radius: programs affected if field X in file Y changes |
 
 ### Call graph
 | Tool | Purpose |
@@ -150,7 +161,7 @@ FETCH FIRST 10000 ROWS ONLY
 |------|---------|
 | `ia_program_variables` | All variables declared in a member (type, length, DS flag) |
 | `ia_data_structures` | Data structure definitions and subfields |
-| `ia_subroutines` | BEGSR/EXSR with usage counts (dead-subroutine detection) |
+| `ia_subroutines` | BEGSR/EXSR with usage counts (dead-subroutine detection); filter by `member_name`, `library` |
 
 ### Files & overrides
 | Tool | Purpose |
@@ -187,13 +198,13 @@ FETCH FIRST 10000 ROWS ONLY
 | `ia_member_copybooks` | Copybooks used by a source member |
 | `ia_srvpgm_exports` | Service program exported/imported procedures |
 | `ia_procedure_xref` | Procedure-level cross-reference |
-| `ia_procedure_params` | Procedure PR/PI signatures |
+| `ia_procedure_params` | Procedure PR/PI signatures; `procedure_name` supports % wildcards; filter by `member_name`, `library` |
 | `ia_cl_jobs` | CL SBMJOB/CALL detection with job queue info |
-| `ia_variable_ops` | Variable declarations, assignments, BIF usage |
-| `ia_klist_usage` | KLIST/KFLD key list definitions |
-| `ia_application_area` | Scoped project areas and their objects |
+| `ia_variable_ops` | Variable declarations, assignments, BIF usage; filter by `member_name`, `opcode`, `library` |
+| `ia_klist_usage` | KLIST/KFLD key list definitions; filter by `kfld_name` with `%` wildcards (e.g., `DBODIV%`) |
+| `ia_application_area` | Forward: area → objects (`area_name=MYAREA`); Reverse: object → areas (`object_name=CUSTMAST`, supports `%`) |
 | `ia_sql_names` | SQL long/short name mapping |
-| `ia_program_files` | Program file usage with PREFIX/RENAME |
+| `ia_program_files` | Program file usage with PREFIX/RENAME; filter by `member_name`, `library` |
 
 ### General-Purpose (prefer for >100 rows)
 | Tool | Purpose |
@@ -211,7 +222,7 @@ FETCH FIRST 10000 ROWS ONLY
 | How many refs to X? | `ia_reference_count` | — |
 | What does X call / who calls X? | `ia_call_hierarchy` | [#2, #3](references/sql-patterns.md) |
 | Params passed at each call site? | `ia_call_parameters` | — |
-| Impact of changing field F in file X? | `ia_field_impact` | [#4](references/sql-patterns.md) |
+| Impact of changing field F in file X? | `ia_file_field_impact_analysis` | [#4](references/sql-patterns.md) |
 | Variables in program X? | `ia_program_variables` | [#5](references/sql-patterns.md) |
 | Data structures in program X? | `ia_data_structures` | — |
 | Subroutines in program X? | `ia_subroutines` | — |
@@ -220,7 +231,7 @@ FETCH FIRST 10000 ROWS ONLY
 | What type/library is object X? | `ia_object_lookup` | [#6](references/sql-patterns.md) |
 | Does member X exist? Metadata? | `ia_member_lookup` | — |
 | Inventory of objects by type? | `ia_object_list` | — |
-| Program metadata / compile info? | `ia_program_info` | [#14](references/sql-patterns.md) |
+| Program metadata / compile info? | `ia_program_summary` | [#14](references/sql-patterns.md) |
 | Lifecycle / last-used dates? | `ia_object_lifecycle` | — |
 | Object size / largest or unused objects? | `ia_obj_size` | — |
 | Dead code (compiled)? | `ia_unused_objects` | [#15](references/sql-patterns.md) |
@@ -228,7 +239,7 @@ FETCH FIRST 10000 ROWS ONLY
 | Complexity hotspots? | `ia_code_complexity` | — |
 | Circular call chains? | `ia_circular_deps` | — |
 | Repo health / member inventory? | `ia_dashboard` | — |
-| List tables in iA library? | `ia_library_files` | [#7](references/sql-patterns.md) |
+| List tables in iA library? | `ia_library_files` (default) or `ia_library_files(library=#AIDEMO)` for other libraries | [#7](references/sql-patterns.md) |
 | Raw RPG/CL token stream? | `ia_rpg_source_tokens`, `ia_cl_source_tokens` | — |
 | RPG source code for member X? | `ia_rpg_source` (optional `source_spec` filter) | — |
 | Members with spec type H/F/P in library X? | `ia_rpg_source` (member_name=*ALL, source_spec=H, library_name=X) | — |
@@ -272,6 +283,7 @@ FETCH FIRST 10000 ROWS ONLY
 - **`*SRVPGM`** in results = amplifier — always check what depends on it next (chain `ia_find_object_usages` or `ia_reference_count`)
 - **`*DSPF`** = user-facing screen impact — flag prominently
 - **Empty results** are suspicious — object may be invoked by job scheduler or external system
+- **Empty results with a user-specified library filter** — do NOT silently retry without the filter. Report the negative result explicitly ("IASRV01SV was not found as a referenced object in IAOBJDEV") then ask: "It exists in library X — would you like to see references there instead?" The user may have intentionally scoped to that library (e.g., verifying no cross-library coupling).
 - Always: **summarize by object type**, count references, state risk level, suggest a concrete next step
 
 ### `REFERENCE_SOURCE` column (`ia_find_object_usages`, `IAALLREFPF`)
@@ -290,10 +302,80 @@ FETCH FIRST 10000 ROWS ONLY
 | `E` | **Explicit** — direct reference (e.g., direct bind or call) |
 | ` ` (blank) | Not applicable for this reference type |
 
-### `FILE_USAGE` column (`ia_find_object_usages`, `ia_field_impact`, `ia_object_references`, `IAALLREFPF`)
+### `FILE_USAGE` column (`ia_find_object_usages`, `ia_file_field_impact_analysis`, `ia_object_references`, `IAALLREFPF`)
 
 Populated only for `*FILE` references; blank for other object types (e.g., `*SRVPGM`, `*MODULE`).
 Indicates how the program uses the file (input, output, update, etc.).
+
+## Response Formatting
+
+**Always use tables** when presenting lists of objects, programs, dependencies, or analysis results. Tables are clearer than bullet lists and make patterns visible.
+
+### When to Tabulate
+
+- **Impact analysis results** — Group affected programs by NEEDS_CHANGE / NEEDS_RECOMPILE / STRUCTURAL (each group in its own table)
+- **Where-used results** — Table with columns: Object | Library | Type | Usage/Impact
+- **Call hierarchy** — Table with columns: Caller | Called | Call Type
+- **File/field dependencies** — Table showing the chain: File → Dependent File → Programs
+- **Source inventory** — Table with columns: Member | Library | Type | Lines | Complexity
+- **Lifecycle/usage data** — Table with dates, usage counts, size metrics
+- **Multi-step analysis results** — Synthesize into 2-4 focused tables, one per result category
+
+### Table Structure
+
+**Key principle:** Each table should focus on one category of results (e.g., "NEEDS_CHANGE programs", "STRUCTURAL dependents", "Programs via LF").
+
+Typical columns by analysis type:
+
+| Analysis Type | Key Columns |
+|---------------|------------|
+| Program impact | Program \| Library \| Type \| Status/Impact |
+| File dependencies | File \| Library \| Dependent \| Type \| Reason |
+| Call hierarchy | Caller \| Called \| Call Count \| Type |
+| Where-used | Object \| Type \| Library \| Referenced By \| Usage |
+| Complexity metrics | Member \| Lines \| Cyclomatic \| Dead Code \| Risk |
+| Batch jobs | CL Program \| Job Queue \| Job Desc \| Hold Status |
+
+**Deduplication:** When a program appears in multiple categories (e.g., CITY41 in both NEEDS_CHANGE and "Programs via LF"), use a footnote or note in the table row (e.g., "*Also in NEEDS_CHANGE list") rather than repeating the full row.
+
+### Example: Field Impact Analysis Response
+
+```
+Field: CUID in CUSTDATA (ZONED, 6 digits, 0 decimals)
+
+### Direct References — NEEDS_CHANGE
+| Program | Library | Type | Status |
+|---------|---------|------|--------|
+| CITY9 | AIDEMOLIB | RPGLE | Source edit required |
+| CITY17 | AIDEMOLIB | RPGLE | Source edit required |
+
+### Direct References — NEEDS_RECOMPILE
+| Program | Library | Type | Status |
+|---------|---------|------|--------|
+| CITY11 | AIDEMOLIB | RPGLE | Recompile only |
+| CITY28 | AIDEMOLIB | RPGLE | Recompile only |
+
+### Via ORDDATA File (structural dependency)
+| Program | Uses File | Library | Type | Impact |
+|---------|-----------|---------|------|--------|
+| CITY39 | ORDDATA | AIDEMOLIB | RPGLE | Indirect rebuild |
+
+### Action Items
+| Task | Objects | Action |
+|------|---------|--------|
+| Review & Edit | CITY9, CITY17... | Verify compatibility |
+| Recompile | All 17 programs | Required |
+```
+
+**Never use bullet lists for:**
+- Multiple programs, files, or objects (use table)
+- Comparative data (use table to show structure)
+- Results with 3+ attributes per item (use table to avoid cramping)
+
+**OK for bullets:**
+- Single conceptual items ("Goals:", "Why:", "Notes:")
+- Short action statements (3-4 bullets max)
+- Explanatory context (not data)
 
 ## References
 

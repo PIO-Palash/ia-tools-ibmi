@@ -19,24 +19,23 @@ Use them with **VS Code GitHub Copilot**, **Claude Code**, or any MCP-compatible
 
 A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to query all 35+ iA tables. Invoke with `/ia` in any Claude Code session. The skill includes table schemas, SQL patterns, and query workflows in its `references/` folder.
 
-## Tools (47 custom + 2 built-in)
+## Tools (46 custom + 2 built-in)
 
 ### Custom iA Tools (defined in `impact-analysis.yaml`)
 
 | # | Tool | Description |
 |---|------|-------------|
 | 1 | `ia_find_object_usages` | Find all objects referencing a given object (filter by type or library) |
-| 2 | `ia_call_hierarchy` | Program call tree (CALLERS/CALLEES/BOTH) |
-| 3 | `ia_field_impact` | Blast radius of changing a field in a file |
-| 4 | `ia_program_variables` | All variables declared in a program |
+| 2 | `ia_call_hierarchy` | Program call tree (CALLERS/CALLEES/BOTH); searches by program or procedure name |
+| 3 | `ia_file_field_impact_analysis` | Blast radius of changing a field in a file |
+| 4 | `ia_program_variables` | All variables declared in a program, including constants with their declared values |
 | 5 | `ia_data_structures` | Data structure definitions and subfields |
 | 6 | `ia_call_parameters` | Parameters passed at each external call site |
 | 7 | `ia_subroutines` | BEGSR/EXSR details with usage counts |
 | 8 | `ia_file_overrides` | OVRDBF statements (real file routing) |
 | 9 | `ia_file_fields` | Field-level metadata for a database file (names, types, lengths, key sequence, reference chain) |
 | 10 | `ia_object_list` | Repository inventory filtered by object type and attribute |
-| 11 | `ia_program_info` | Program/module metadata (source, compile info) |
-| 12 | `ia_program_summary` | Quick program overview with compile info and complexity |
+| 11 | `ia_program_summary` | Quick program overview with compile info and complexity; supports library filter |
 | 13 | `ia_program_detail` | Deep structural analysis (calls, files, subroutines, variables) |
 | 14 | `ia_source_code` | Source member location and line counts |
 | 15 | `ia_rpg_source_tokens` | Token-level RPG source analysis |
@@ -51,7 +50,7 @@ A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to qu
 | 24 | `ia_override_chain` | Chained OVRDBF dependencies (A→B→C) |
 | 25 | `ia_object_lifecycle` | Creation/change/last-used dates per object |
 | 26 | `ia_code_complexity` | Complexity metrics per source member |
-| 27 | `ia_library_files` | List all files/tables in the iA library |
+| 27 | `ia_library_files` | List all files/tables in any IBM i library (defaults to configured IA_LIBRARY; supports `#` library names) |
 | 28 | `ia_object_lookup` | Look up object type, library, and attribute by name |
 | 29 | `ia_file_dependencies` | Find LFs, indexes, and views dependent on a physical file |
 | 30 | `ia_uncompiled_sources` | Find source members without compiled objects (orphaned sources) |
@@ -67,15 +66,15 @@ A token-efficient skill at `.claude/skills/ia/` that teaches AI agents how to qu
 | 34 | `ia_procedure_params` | Get procedure PR/PI parameter signatures |
 | 35 | `ia_cl_jobs` | Detect SBMJOB calls in CL programs |
 | 36 | `ia_variable_ops` | Find variable declarations, assignments, BIFs |
-| 37 | `ia_klist_usage` | Find KLIST/KFLD key list definitions |
-| 38 | `ia_application_area` | List application areas and their objects |
+| 37 | `ia_klist_usage` | Find KLIST/KFLD key list definitions; filter by key field name with `kfld_name` (supports % wildcards) |
+| 38 | `ia_application_area` | List areas/objects (forward) or find which areas contain an object (reverse lookup via `object_name`) |
 | 39 | `ia_sql_names` | Map SQL long names to system short names |
 | 40 | `ia_program_files` | List files used by a program with PREFIX details |
 | 41 | `ia_rpg_source` | Read RPG source code with optional spec-type and member filtering (supports *ALL member) |
 | 42 | `ia_rpg_source_search` | Search RPG source across members for keywords |
 | 43 | `ia_rpg_source_stats` | Modernization stats: free-format vs fixed-format, comment ratio |
 | 44 | `ia_member_lookup` | Look up source member metadata and verify existence |
-| 45 | `ia_object_references` | Find what an object references/contains (inverse of ia_find_object_usages) |
+| 45 | `ia_object_references` | Find what an object references/contains; filter by source object type to disambiguate *PGM vs *SRVPGM |
 | 47 | `ia_obj_size` | Object size and usage metrics — lookup a specific object or rank the largest / unused objects |
 
 ### Built-in MCP Server Tools

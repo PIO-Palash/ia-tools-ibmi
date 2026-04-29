@@ -10,20 +10,31 @@ This reference documents optimal tool sequences for common queries. Follow these
 
 ### QF-1: "What happens if I change this file/field?" (Full Impact Analysis)
 
-**Single-query approach (preferred):**
+**Standard 3-tool chain (always run all steps, then synthesize):**
 ```
-ia_field_impact(field_name="CUSTNO", file_name="CUSTMAST", limit=500)
-```
-Returns: All programs affected, their usage type (READ/WRITE/UPDATE), and object types.
+1. ia_file_field_impact_analysis(file_name="CUSTMAST", field_name="CUSTNO", limit=500)
+   → Direct PF references: *PGM, *SRVPGM, *DSPF, *FILE
+   → impact_type: NEEDS_CHANGE / NEEDS_RECOMPILE / STRUCTURAL
 
-**Deep-dive chain (if needed):**
-```
-1. ia_field_impact → Get affected programs
-2. ia_find_object_usages(object_name="<srvpgm>", object_type="*SRVPGM") → Only for *SRVPGM in results (cascade check)
-3. ia_call_hierarchy(program_name="<critical_pgm>", direction="callers") → Only for critical programs
+2. ia_file_dependencies(file_name="CUSTMAST")
+   → LFs / indexes / views over the PF (STRUCTURAL — must be rebuilt)
+   → If none, stop here
+
+3. ia_find_object_usages(object_name="<each_LF>")  [parallel for multiple LFs]
+   → Programs/objects referencing those LFs — also impacted
 ```
 
-**Optimization:** Stop after step 1 if results are < 10 objects. Only chain for *SRVPGM amplifiers or > 20 affected objects.
+**impact_type values:**
+- `NEEDS_CHANGE` — field name found explicitly in RPG (IAQRPGSRC) or CL (IAQCLSRC) source; requires source edit
+- `NEEDS_RECOMPILE` — file referenced but field not in source (implicit record-format access); or `*SRVPGM` (source check by object name is unreliable)
+- `STRUCTURAL` — `*FILE` or `*DSPF` that inherits field definitions via DDS REF(); must be rebuilt, not just recompiled
+
+**Present as one response grouped by section:**
+- "Directly references PF": results from step 1
+- "Logical files / views over PF": results from step 2
+- "Programs via LF": results from step 3
+
+**Optimization:** Skip step 3 if ia_file_dependencies returns no LFs. Only chain `ia_call_hierarchy` for specific critical programs the user identifies.
 
 ---
 
@@ -174,7 +185,7 @@ Returns: All members including the copybook, with line numbers and member types.
 **Two-query approach:**
 ```
 1. ia_srvpgm_exports(object_name="IASRV01SV", procedure_type="EXPORT") → Exported procedures
-2. ia_procedure_params(procedure_name="<specific>") → Parameter signatures
+2. ia_procedure_params(procedure_name="<specific>", library="AIDEMOLIB") → Parameter signatures
 ```
 
 **Alternative:** For procedure callers, use `ia_procedure_xref(procedure_name="X", direction="CALLERS")`.
@@ -207,18 +218,24 @@ Returns: SBMJOB calls with job name, job queue, hold flag.
 
 **Single query:**
 ```
-ia_program_files(member_name="ORDENTRY", limit=50)
+ia_program_files(member_name="ORDENTRY", library="AIDEMOLIB", limit=50)
 ```
-Returns: Files used with PREFIX, RENAME, record format — more detailed than ia_find_object_usages for file analysis.
+Returns: Files used with PREFIX, RENAME, record format — more detailed than ia_find_object_usages for file analysis. Use `library` to scope when the same member exists in multiple libraries.
 
 ---
 
 ### QF-21: "Scoped analysis by application area"
 
-**Two-query approach:**
+**Forward (area → objects):**
 ```
 1. ia_application_area(area_name="*LIST") → List all defined areas
 2. ia_application_area(area_name="MYPROJECT") → Objects in specific area
+```
+
+**Reverse (object → areas):**
+```
+ia_application_area(object_name="CUSTMAST") → All areas containing CUSTMAST
+ia_application_area(object_name="%CUST%")   → Wildcard: areas with any CUST* object
 ```
 
 ---
@@ -296,7 +313,7 @@ execute_sql → SQL with SOURCE_SPEC filter (P=procedures, D=definitions, F=file
 
 **Single query:**
 ```
-ia_field_impact(field_name="ORDAMT", file_name="*ALL", limit=500)
+ia_file_field_impact_analysis(field_name="ORDAMT", file_name="*ALL", limit=500)
 ```
 
 **Only add** `ia_program_variables` for specific programs where you need to see all variables, not just the target field.
@@ -361,7 +378,7 @@ User Question
     ├─► "What uses X?" ──────────► ia_find_object_usages (single call)
     │                              └─► Chain ia_call_hierarchy ONLY if *SRVPGM in results
     │
-    ├─► "Impact of changing X?" ─► ia_field_impact (single call)
+    ├─► "Impact of changing X?" ─► ia_file_field_impact_analysis (single call)
     │                              └─► Chain ia_find_object_usages ONLY for *SRVPGM amplifiers
     │
     ├─► "What does X call?" ─────► ia_call_hierarchy direction=called (single call)
