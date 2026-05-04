@@ -112,7 +112,7 @@ Present as one response with four sections:
 **DON'T chain** for:
 - Simple counts (just count your results)
 - Every `*PGM` in results (overkill — only investigate critical ones)
-- `ia_source_code` before token analysis (go straight to `ia_rpg_source_tokens`)
+- `ia_member_lookup` before token analysis just to get location (go straight to `ia_rpg_source_tokens`)
 
 ## Tool Preference Rule
 
@@ -128,18 +128,18 @@ Present as one response with four sections:
 
 **Why:** Dedicated tools truncate silently. `execute_sql` with correct SQL gives you full control.
 
-## Dedicated Tools (45)
+## Dedicated Tools (44)
 
 ### Discovery — start here
 | Tool | Purpose |
 |------|---------|
 | `ia_library_files` | List every file/table in any IBM i library (default: configured IA_LIBRARY; pass `library=#AIDEMO` to query other libraries including `#` names) |
 | `ia_object_lookup` | Resolve an object name → type, library, attribute (wildcard with `%`) |
-| `ia_member_lookup` | Source member metadata and existence check (file, library, type, timestamps) |
-| `ia_object_list` | Inventory objects by type (`*PGM`, `*SRVPGM`, `*FILE`, ...) |
+| `ia_member_lookup` | Source member metadata: existence check, file/library/type, timestamps, and line counts (supersedes ia_source_code) |
+| `ia_object_list` | Inventory objects by type (`*PGM`, `*SRVPGM`, `*FILE`, ...); optional library filter |
 | `ia_program_summary` | Program overview: metadata, compile info, complexity metrics, library filter |
 | `ia_dashboard` | Repo health summary: categories, line counts, library map |
-| `ia_repo_config` | iA repository configuration settings |
+| `ia_repo_config` | iA repository configuration settings; IAOBJUSGDR = date usage stats last collected (freshness check for ia_obj_size / ia_unused_objects) |
 
 ### Where-used & references — highest-impact queries
 | Tool | Purpose |
@@ -185,7 +185,7 @@ Present as one response with four sections:
 |------|---------|
 | `ia_object_lifecycle` | Creation/change/last-used dates, days-used count |
 | `ia_obj_size` | Object size + usage category (Never/Rare) — lookup or rank largest/unused |
-| `ia_code_complexity` | IF/DO/SQL/GOTO/PROC counts, executable lines, call stats |
+| `ia_code_complexity` | IF/DO/SQL/GOTO/PROC counts, executable lines, call stats; includes LIBRARY_NAME and optional library filter |
 | `ia_unused_objects` | Dead code candidates (compiled but never referenced) |
 | `ia_uncompiled_sources` | Orphaned sources (never compiled into objects) |
 | `ia_dds_to_ddl_status` | DDS→DDL modernization tracking |
@@ -200,7 +200,7 @@ Present as one response with four sections:
 | `ia_procedure_xref` | Procedure-level cross-reference |
 | `ia_procedure_params` | Procedure PR/PI signatures; `procedure_name` supports % wildcards; filter by `member_name`, `library` |
 | `ia_cl_jobs` | CL SBMJOB/CALL detection with job queue info |
-| `ia_variable_ops` | Variable declarations, assignments, BIF usage; filter by `member_name`, `opcode`, `library` |
+| `ia_variable_ops` | Variable declarations, assignments, BIF usage; member_name optional (*ALL for cross-member opcode search); filter by `opcode`, `library` |
 | `ia_klist_usage` | KLIST/KFLD key list definitions; filter by `kfld_name` with `%` wildcards (e.g., `DBODIV%`) |
 | `ia_application_area` | Forward: area → objects (`area_name=MYAREA`); Reverse: object → areas (`object_name=CUSTMAST`, supports `%`) |
 | `ia_sql_names` | SQL long/short name mapping |
@@ -255,6 +255,7 @@ Present as one response with four sections:
 | Procedure-level callers? | `ia_procedure_xref` | — |
 | Procedure signature? | `ia_procedure_params` | — |
 | Batch job detection? | `ia_cl_jobs` | — |
+| **Document program X?** | **Follow [program-documentation.md](references/program-documentation.md) — 7-step mandatory sequence** | — |
 | Anything else | Find the table in [tables.md](references/tables.md), schema via `describe_sql_object`, query via `execute_sql` |
 
 ## Parameter Rules for Dedicated Tools
@@ -380,6 +381,7 @@ Field: CUID in CUSTDATA (ZONED, 6 digits, 0 decimals)
 ## References
 
 - **Optimal tool flows for common queries** → [references/query-flows.md](references/query-flows.md) (READ FIRST)
+- **Program documentation (7-step mandatory sequence)** → [references/program-documentation.md](references/program-documentation.md)
 - **Analysis playbooks & chaining strategy** → [references/playbook.md](references/playbook.md)
 - **SQL templates** for `execute_sql` fallbacks → [references/sql-patterns.md](references/sql-patterns.md)
 - **All 35+ iA tables** catalog → [references/tables.md](references/tables.md)
@@ -464,6 +466,9 @@ Edit files in `.claude/skills/ia/`:
 - `references/playbook.md` — Analysis strategies
 - `references/sql-patterns.md` — Fallback SQL templates
 - `references/tables.md` — Table catalog
+- `references/program-documentation.md` — Program doc 7-step sequence, verification rules, common traps
+
+**Mirror rule:** After editing any file above, copy it to `.bob/skills/ia/` at the same relative path.
 
 ### Improvement Principles
 
